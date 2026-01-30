@@ -5,3 +5,9 @@
 ## Quickstart
 
 Для запуска у вас в системе должен быть установлен docker compose.
+
+Перед запуском необходимо получить ваш бесплатный API-ключ на платформе [OpenRouter](https://openrouter.ai/)
+
+Полученный ключ вставить в файл docker-compose.yml в текущей директории:
+
+- OPENROUTER_API_KEY=ВАШ_КЛЮЧ

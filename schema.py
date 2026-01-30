@@ -41,6 +41,7 @@ class InterviewState(TypedDict):
     # Состояние диалога и технические флаги без персональных данных
     messages: Annotated[List[BaseMessage], add_messages]
     internal_thoughts: str
+    thoughts_history: List[str]
     next_instruction: str
     is_finished: bool
     final_report: Optional[dict]
