@@ -10,8 +10,6 @@ class InterviewLogger:
     def log_session(self, state: dict):
         report = state.get("final_report", {})
         
-        # --- АБЗАЦ 1: Для команды найма ---
-        # Собираем общие показатели (грейд, рекомендация, уверенность, софт-скиллы)
         internal_feedback = (
             f"ИТОГОВЫЙ ГРЕЙД: {report.get('grade', 'N/A')}. "
             f"РЕКОМЕНДАЦИЯ: {report.get('hiring_recommendation', 'N/A')}. "
@@ -20,7 +18,6 @@ class InterviewLogger:
             f"вовлеченность: {report.get('engagement', 'N/A')}."
         )
 
-        # --- АБЗАЦ 2: Для кандидата (Хард-скиллы и Roadmap) ---
         skills_list = []
         if report.get("hard_skills_analysis"):
             for skill in report["hard_skills_analysis"]:
@@ -36,10 +33,8 @@ class InterviewLogger:
 
         candidate_feedback = f"{skills_feedback}{roadmap_text}"
 
-        # Объединяем в два абзаца через двойной перенос строки
         full_feedback_text = f"{internal_feedback}\n\n{candidate_feedback}"
 
-        # Формирование turns (остается без изменений)
         turns = []
         messages = state.get("messages", [])
         thoughts_history = state.get("thoughts_history", [])

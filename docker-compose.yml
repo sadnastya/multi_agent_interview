@@ -9,11 +9,12 @@ services:
       - MODEL_PROVIDER=openrouter
       
       - OPENROUTER_API_KEY=
-      - OPENROUTER_MODEL=openai/gpt-oss-120b
+      - OPENROUTER_MODEL=arcee-ai/trinity-large-preview:free
+
       
     volumes:
       # Mount the log file so it persists on your host machine
-      - ./interview_log.json:/app/interview_log.json
+      - ./data:/data
     ports:
       - "8000:8000"
     command: chainlit run main.py --host 0.0.0.0 --port 8000

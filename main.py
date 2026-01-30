@@ -44,6 +44,4 @@ async def main(message: cl.Message):
 
     if state.get("final_report"):
         await cl.Message(content="**Интервью завершено. Отчет сформирован.**").send()
-        # Передаем актуальное имя в логгер
-        logger.participant_name = state.get("participant_name", "Кандидат")
         logger.log_session(state)
