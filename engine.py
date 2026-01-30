@@ -1,14 +1,38 @@
-from core.llm_factory import get_llm
-from core.models import ReflectionOutput, AgentState, UserIntent
-from langchain_core.messages import HumanMessage
+import os
+from dotenv import load_dotenv
+from typing import Literal
+from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage
-import json
-import re
+from langgraph.graph import StateGraph, END
+from schema import InterviewState, ReflectionOutput, FinalFeedback
+
+load_dotenv()
+
+def get_llm():
+    provider = os.getenv("MODEL_PROVIDER", "ollama").lower()
+    if provider == "openrouter":
+        return ChatOpenAI(
+            model=os.getenv("OPENROUTER_MODEL", "arcee-ai/trinity-large-preview:free"),
+            openai_api_key=os.getenv("OPENROUTER_API_KEY"),
+            openai_api_base="https://openrouter.ai/api/v1",
+            default_headers={
+                "HTTP-Referer": "https://localhost:3000",
+                "X-Title": "Multi-Agent Interviewer"
+            },
+            temperature=0.1,
+            max_retries=3
+        )
+    elif provider == "gemini":
+        return ChatGoogleGenerativeAI(model=os.getenv("GEMINI_MODEL", "gemini-1.5-flash"), temperature=0.1)
+    return ChatOllama(model=os.getenv("OLLAMA_MODEL", "llama3.1"), temperature=0.1)
 
 llm = get_llm()
 
-def strategist_node(state: AgentState):
-    # Сохраняем твою логику, добавляя строгие технические ограничения
+def strategist_node(state: InterviewState):
+    structured_llm = llm.with_structured_output(ReflectionOutput)
+    # Инструкция для техлида: работаем с абстрактным кандидатом
     system_prompt = f"""
         Представь, что ты наблюдаешь за техническим интервью. Интервьер - другая LLM модель.
         В следующих сообщениях ты будешь получать вопрос интервьера и ответа кандидата.
@@ -28,7 +52,7 @@ def strategist_node(state: AgentState):
         }}
 
         ВСЕ ПОЛЯ В ПРИМЕРЕ ОБЯЗАТЕЛЬНЫ. 
-        
+                
         поле intent показывает намерение кандидата:
         1. greeting - приветствие
         2. answer - ответ на вопрос
@@ -40,59 +64,29 @@ def strategist_node(state: AgentState):
         Общие рекомендации:
         - после приветствия стоит начать задавать технические вопросы
         - старайся варьировать сложность вопросов в зависимости от ответов кандидата
+        - не нужно задавать слишком много вопросов по одной теме
+        - если кандидат отвечает правильно, можно немного усложнить следующий вопрос
+        - если кандидат отвечает неправильно, объясни правильный ответ и задай вопрос по другой теме
         - если кандидат говорит чушь или не знает ответ, используй intent=nonsense или intent=i_dont_know и дай правильный ответ
         - если кандидат задает вопросы, укажи intent=question и ответь на них (но только если вопросы по теме)
         - не давай менять тему и уходить от интервью
     """
     
     msgs = [SystemMessage(content=system_prompt)] + state["messages"]
-
-    try:
-        # Получаем сырой ответ для ручной очистки
-        raw_res = llm.invoke(msgs)
-        content = raw_res.content
-
-        # Санитайзинг: удаляем ```json ... ``` и лишние символы
-        clean_json = re.sub(r"```json\s?|```", "", content).strip()
-        
-        # Парсим в словарь
-        data = json.loads(clean_json)
-        
-        # Валидируем через Pydantic
-        res = ReflectionOutput(**data)
-        
-        # Формируем красивые internal_thoughts для интерфейса Chainlit
-        thoughts = (
-            f"**Intent:** {res.intent.value.upper()}\n"
-            f"**Analysis:** {res.analysis}\n"
-            f"**Strategy:** {res.strategy}\n"
-            f"**Correct:** {'Да' if res.is_correct else 'Нет'}"
-        )
-
-    except Exception as e:
-        # Если модель все же выдала битый JSON
-        print(f"\n[DEBUG] Ошибка парсинга: {e}")
-        return {
-            "internal_thoughts": "⚠️ Ошибка структуры JSON. Переход в аварийный режим.",
-            "next_instruction": "Продолжай диалог вежливо, уточни технические навыки кандидата.",
-            "is_finished": False
-        }
+    res = structured_llm.invoke(msgs)
     
     return {
-        "internal_thoughts": thoughts,
+        "internal_thoughts": f"**Intent:** {res.intent.value}\n**Analysis:** {res.analysis}",
         "next_instruction": res.instruction,
-        "is_finished": res.stop_interview or res.intent == UserIntent.COMMAND
+        "is_finished": res.stop_interview
     }
 
-def interviewer_node(state: AgentState):
-
+def interviewer_node(state: InterviewState):
     is_first_message = len(state["messages"]) == 0
-    
-    
     prompt = f"""
     ТЫ: Профессиональный IT-рекрутер.
     ТВОЯ ЗАДАЧА: Вести техническое интервью, опираясь на указания Стратега.
-
+    
     {"ЭТО НАЧАЛО ИНТЕРВЬЮ. Поприветствуй кандидата и расскажи, что он на техническом собеседовании. Попроси его представиться, тебе необходимо получить информацию о его позиции и навыках" if is_first_message else "Продолжай диалог согласно инструкции."}
     
     ИНСТРУКЦИЯ ОТ СТРАТЕГА(не говори это кандидату): {state['next_instruction']}
@@ -108,11 +102,32 @@ def interviewer_node(state: AgentState):
     8. Твоя цель получать ответы на вопросы, которые помогут оценить технические навыки кандидата.
     9. Если ты считаешь, что интервью можно завершить — аккуратно попрощайся с кандидатом и скажи, что свяжетесь с ним позже. А также если кандидат попросил завершить интервью.
     """
-    
-    # Мы передаем историю сообщений, чтобы Интервьюер видел, на чем остановился диалог
-    response = llm.invoke([
-        ("system", prompt),
-        *state["messages"]
-    ])
-    
+    response = llm.invoke([SystemMessage(content=prompt)] + state["messages"])
     return {"messages": [response]}
+
+def analyst_node(state: InterviewState):
+    structured_llm = llm.with_structured_output(FinalFeedback)
+    prompt = "Ты Senior Manager. Проанализируй всё интервью с Кандидатом и составь итоговый отчет."
+    report = structured_llm.invoke([SystemMessage(content=prompt)] + state["messages"])
+    return {"final_report": report.model_dump(), "is_finished": True}
+
+def create_graph():
+    builder = StateGraph(InterviewState)
+    builder.add_node("strategist", strategist_node)
+    builder.add_node("interviewer", interviewer_node)
+    builder.add_node("analyst", analyst_node)
+
+    builder.set_entry_point("strategist")
+    
+    # Стратег решает: закончить (к аналитику) или продолжать (к интервьюеру)
+    builder.add_conditional_edges(
+        "strategist",
+        lambda x: "analyst" if x["is_finished"] else "interviewer"
+    )
+    
+    # ВАЖНО: Интервьюер всегда ведет к END. 
+    # Это заставит invoke() завершиться и вернуть управление в Chainlit.
+    builder.add_edge("interviewer", END) 
+    builder.add_edge("analyst", END)
+    
+    return builder.compile()
