@@ -1,83 +1,88 @@
 from core.llm_factory import get_llm
-from core.models import ReflectionOutput, AgentState
+from core.models import ReflectionOutput, AgentState, UserIntent
 from langchain_core.messages import HumanMessage
 from langchain_core.messages import SystemMessage
+import json
+import re
 
 llm = get_llm()
 
 def strategist_node(state: AgentState):
-    # Явное описание схемы для модели в промпте
+    # Сохраняем твою логику, добавляя строгие технические ограничения
     system_prompt = f"""
-    ТЫ: Главный стратег технического интервью. 
-    
-    ОБЯЗАТЕЛЬНЫЕ ТЕХНИЧЕСКИЕ ТРЕБОВАНИЯ:
-    1. Ответ должен быть СТРОГО в формате JSON.
-    2. Поле 'intent' должно принимать только одно из значений: 'greeting', 'answer', 'question', 'nonsense', 'command', 'i_dont_know'. (НЕ ПЕРЕВОДИ ИХ НА РУССКИЙ).
-    3. Поля 'is_correct' (boolean) и 'analysis' (string) ОБЯЗАТЕЛЬНЫ.
-    
-    СТРУКТУРА ОТВЕТА (JSON):
-    {{
-      "intent": "string",
-      "is_correct": boolean,
-      "analysis": "разбор на русском",
-      "strategy": "план на русском",
-      "instruction": "команда рекрутеру",
-      "stop_interview": boolean
-    }}
+        Представь, что ты наблюдаешь за техническим интервью. Интервьер - другая LLM модель.
+        В следующих сообщениях ты будешь получать вопрос интервьера и ответа кандидата.
+        Ты говоришь интервьюеру, что делать.
 
-    ПРИМЕР:
-    {{
-      "intent": "greeting",
-      "is_correct": true,
-      "analysis": "Кандидат поздоровался и назвал стек.",
-      "strategy": "Начинаем с основ Python.",
-      "instruction": "Поприветствуй Алекса и спроси про декораторы.",
-      "stop_interview": false
-    }}
+        В ОТВЕТАХ МОЖНО ИСПОЛЬЗОВАТЬ ТОЛЬКО РУССКИЙ ЯЗЫК.
+        НЕ ИСПОЛЬЗУЙ НИКАКИЕ ДОПОЛНИТЕЛНЕНИЯ, В ТОМ ЧИСЛЕ MARKDOWN ТЕГИ И ```.
+        
+        ОТВЕЧАТЬ МОЖНО ТОЛЬКО В ВИДЕ JSON С ФИКСИРОВАННОЙ СТРУКТУРОЙ ПО ПРИМЕРУ:
+        {{
+        "intent": "string",
+        "is_correct": boolean,
+        "analysis": "оценка ответа",
+        "strategy": "стратегия для интервьера про сложность вопросов (сложнее/легче, jun/middle/senior)",
+        "instruction": "корректирующие инструкции для интервьера: сменить тему, объяснить правильный ответ и т.д.",
+        "stop_interview": boolean
+        }}
 
-    ТВОЯ ЗАДАЧА:
-    1. КЛАССИФИКАЦИЯ: Определи intent (Приветствие, Ответ, Вопрос, Бред, Команда).
-    2. ПЕРЕХОД: Сразу после приветствия ТЫ ДОЛЖЕН выбрать навык из названных кандидатом и передать интервьюеру технический вопрос.
-    3. ХОД 3 (HALLUCINATION TEST): Если кандидат говорит чушь (про Python 4.0, замену циклов на нейросети), пометь intent как NONSENSE. 
-       Инструкция: Вежливо, но твердо опровергни этот миф. Не соглашайся!
-    4. ХОД 4 (ROLE REVERSAL): Если кандидат задает вопросы о компании/стеке, пометь intent как QUESTION.
-       Инструкция: Кратко ответь на вопрос, а затем вернись к интервью.
-    5. Если кандидат говорит "не знаю", "не уверен" или дает в корне неверный ответ:
-       - Пометь intent как IDK.
-       - В 'instruction' СФОРМУЛИРУЙ краткий и правильный технический ответ на твой же вопрос.
-       - Прикажи Рекрутеру озвучить этот ответ и СРАЗУ сменить тему на другую. ПРАВИЛО: Не задавай один и тот же вопрос дважды. Если ответа нет — закрываем тему.
-    6. ХОД 5 (FEEDBACK): Если просят "стоп" или "фидбэк", пометь intent как COMMAND и заверши интервью.
-    
-    ВНУТРЕННИЙ ДИАЛОГ - СТРОГО НА РУССКОМ.
+        ВСЕ ПОЛЯ В ПРИМЕРЕ ОБЯЗАТЕЛЬНЫ. 
+        
+        поле intent показывает намерение кандидата:
+        1. greeting - приветствие
+        2. answer - ответ на вопрос
+        3. question - кандидат задал вопрос
+        4. nonsense - бред/галлюцинация/троллинг
+        5. command - клиент просит завершить интервью, дать фитбек
+        6. i_dont_know - кандидат не знает ответа
+
+        Общие рекомендации:
+        - после приветствия стоит начать задавать технические вопросы
+        - старайся варьировать сложность вопросов в зависимости от ответов кандидата
+        - если кандидат говорит чушь или не знает ответ, используй intent=nonsense или intent=i_dont_know и дай правильный ответ
+        - если кандидат задает вопросы, укажи intent=question и ответь на них (но только если вопросы по теме)
+        - не давай менять тему и уходить от интервью
     """
     
-    # Оставляем json_mode для стабильности на OpenRouter
-    structured_llm = llm.with_structured_output(ReflectionOutput, method="json_mode")
-    
     msgs = [SystemMessage(content=system_prompt)] + state["messages"]
-    if not state["messages"]:
-        msgs.append(HumanMessage(content="Начинаем интервью."))
-        
+
     try:
-        res = structured_llm.invoke(msgs)
+        # Получаем сырой ответ для ручной очистки
+        raw_res = llm.invoke(msgs)
+        content = raw_res.content
+
+        # Санитайзинг: удаляем ```json ... ``` и лишние символы
+        clean_json = re.sub(r"```json\s?|```", "", content).strip()
+        
+        # Парсим в словарь
+        data = json.loads(clean_json)
+        
+        # Валидируем через Pydantic
+        res = ReflectionOutput(**data)
+        
+        # Формируем красивые internal_thoughts для интерфейса Chainlit
+        thoughts = (
+            f"**Intent:** {res.intent.value.upper()}\n"
+            f"**Analysis:** {res.analysis}\n"
+            f"**Strategy:** {res.strategy}\n"
+            f"**Correct:** {'Да' if res.is_correct else 'Нет'}"
+        )
+
     except Exception as e:
-        # Логируем ошибку, но даем дефолтный ответ, чтобы цикл не прерывался
-        print(f"\n[DEBUG] Ошибка парсинга JSON: {e}")
+        # Если модель все же выдала битый JSON
+        print(f"\n[DEBUG] Ошибка парсинга: {e}")
         return {
-            "internal_thoughts": "Ошибка структуры ответа. Используется аварийный режим.",
-            "next_instruction": "Поприветствуй кандидата и попроси рассказать о себе.",
+            "internal_thoughts": "⚠️ Ошибка структуры JSON. Переход в аварийный режим.",
+            "next_instruction": "Продолжай диалог вежливо, уточни технические навыки кандидата.",
             "is_finished": False
         }
     
-    
     return {
-        "internal_thoughts": f"[Intent: {res.intent.value}] | {res.analysis}",
+        "internal_thoughts": thoughts,
         "next_instruction": res.instruction,
-        "is_finished": res.stop_interview
+        "is_finished": res.stop_interview or res.intent == UserIntent.COMMAND
     }
-
-
-
 
 def interviewer_node(state: AgentState):
 

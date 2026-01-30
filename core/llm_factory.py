@@ -18,7 +18,7 @@ def get_llm():
                 "HTTP-Referer": "https://localhost:3000", # Обязательно для OpenRouter
                 "X-Title": "Multi-Agent Interviewer"
             },
-            temperature=0.2,
+            temperature=0.1,
             max_retries=3
         )
     
@@ -26,12 +26,12 @@ def get_llm():
         return ChatGoogleGenerativeAI(
             model=os.getenv("GEMINI_MODEL", "gemini-1.5-flash"),
             google_api_key=os.getenv("GEMINI_API_KEY"),
-            temperature=0.2
+            temperature=0.1
         )
     
     else:
         return ChatOllama(
             model=os.getenv("OLLAMA_MODEL", "llama3.1"),
-            temperature=0.2,
+            temperature=0.1,
             format="json"
         )

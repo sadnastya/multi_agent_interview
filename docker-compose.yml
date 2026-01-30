@@ -1,0 +1,19 @@
+services:
+  interview-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: interview_agent_app
+    restart: unless-stopped
+    environment:
+      - MODEL_PROVIDER=openrouter
+      
+      - OPENROUTER_API_KEY=
+      - OPENROUTER_MODEL=openai/gpt-oss-120b
+      
+    volumes:
+      # Mount the log file so it persists on your host machine
+      - ./interview_log.json:/app/interview_log.json
+    ports:
+      - "8000:8000"
+    command: chainlit run main.py --host 0.0.0.0 --port 8000

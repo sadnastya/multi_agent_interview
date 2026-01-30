@@ -26,7 +26,6 @@ class AgentState(TypedDict):
     turn_id: int
     is_finished: bool
 
-
 class HardSkillItem(BaseModel):
     topic: str
     status: str = Field(description="Корректно / Пробел в знаниях")
